@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>On The Clock - Gig Tracker</title>
+<link rel="icon" href="data:,">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div style="min-height:100vh;background:#14161A;color:#9A9CA3;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:20px;text-align:center;">
+    Loading... if this doesn't go away, you may need an internet connection the first time you open this page.
+  </div>
+</div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+
+const Fuel = (p) => React.createElement("span", p, "\u26FD");
+const Gauge = (p) => React.createElement("span", p, "\u23F1");
+const ListChecks = (p) => React.createElement("span", p, "\u2630");
+const BarChart3 = (p) => React.createElement("span", p, "\uD83D\uDCCA");
+const Trash2 = (p) => React.createElement("span", p, "\u2715");
+const Clock = (p) => React.createElement("span", p, "\u23F0");
+const MapPin = (p) => React.createElement("span", p, "\uD83D\uDCCD");
+const Play = (p) => React.createElement("span", p, "\u25B6");
+const CheckCircle2 = (p) => React.createElement("span", p, "\u2713");
+const Hourglass = (p) => React.createElement("span", p, "\u23F3");
+const Save = (p) => React.createElement("span", p, "\uD83D\uDCBE");
+const Copy = (p) => React.createElement("span", p, "\u29C9");
+const ClipboardPaste = (p) => React.createElement("span", p, "\uD83D\uDCCB");
+
+
+const PLATFORMS = ["Instacart", "Spark", "DoorDash", "Grubhub"];
+const CARS = ["Cruze", "Cobalt"];
+const STORES_BY_PLATFORM = {
+  Spark: ["Walmart 1426", "Walmart 2638", "Walmart 1478", "Walmart 2244", "Walmart 5296", "Walmart 2792", "Sam's Club"],
+  Instacart: ["South Point Aldi", "Ashland Aldi", "Ashland Kroger", "Russell Kroger", "7th Ave Kroger", "5th Ave Kroger", "Proctorville Kroger", "Wheelersburg Kroger"],
+  DoorDash: [],
+  Grubhub: [],
+};
+const PLATFORM_COLORS = {
+  Instacart: "#4FD1C5",
+  Spark: "#F5A623",
+  DoorDash: "#FF5A5F",
+  Grubhub: "#8CD867",
+};
+const WAIT_COLOR = "#9A8CD8";
+
+function todayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+function nowTimeStr() {
+  const d = new Date();
+  return d.toTimeString().slice(0, 5);
+}
+function timeToMinutes(t) {
+  if (!t) return null;
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+function durationHrs(start, end) {
+  const s = timeToMinutes(start), e = timeToMinutes(end);
+  if (s === null || e === null) return null;
+  let diff = e - s;
+  if (diff < 0) diff += 24 * 60;
+  return diff / 60;
+}
+function fmtMoney(n) {
+  if (n === null || n === undefined || isNaN(n)) return "--";
+  return "$" + n.toFixed(2);
+}
+function fmtNum(n, decimals = 1) {
+  if (n === null || n === undefined || isNaN(n)) return "--";
+  return n.toFixed(decimals);
+}
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+async function loadKey(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw !== null) return JSON.parse(raw);
+    return fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+async function saveKeyRaw(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// fresh storage keys - not shared with any earlier version of this app
+const KEY_SESSIONS = "gigapp2-sessions";
+const KEY_GAS = "gigapp2-gas";
+
+const emptyStartForm = () => ({
+  type: "order",
+  date: todayStr(),
+  platform: "",
+  store: "",
+  storeCustom: "",
+  car: "",
+  startTime: nowTimeStr(),
+  startMiles: "",
+});
+
+const emptyGasForm = () => ({
+  date: todayStr(),
+  car: "",
+  station: "",
+  amount: "",
+  odometer: "",
+});
+
+function GigLogger() {
+  const [tab, setTab] = useState("log");
+  const [sessions, setSessions] = useState([]);
+  const [gasEntries, setGasEntries] = useState([]);
+  const [startForm, setStartForm] = useState(emptyStartForm());
+  const [gasForm, setGasForm] = useState(emptyGasForm());
+  const [savedFlash, setSavedFlash] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const s = await loadKey(KEY_SESSIONS, []);
+      const g = await loadKey(KEY_GAS, []);
+      setSessions(s);
+      setGasEntries(g);
+      const testKey = "gigapp2-storage-check";
+      const testVal = String(Date.now());
+      const writeRes = await saveKeyRaw(testKey, testVal);
+      if (!writeRes.ok) {
+        setSaveError("Your browser's storage isn't available right now (maybe private/incognito mode?). Entries may not save.");
+      } else {
+        try {
+          const readBack = window.localStorage.getItem(testKey);
+          if (!readBack || JSON.parse(readBack) !== testVal) {
+            setSaveError("Storage saved but didn't read back correctly - be careful trusting saves right now.");
+          }
+        } catch (e) {
+          setSaveError("Couldn't verify storage is working - be careful trusting saves right now.");
+        }
+      }
+    })();
+  }, []);
+
+  async function persist(key, value) {
+    const res = await saveKeyRaw(key, value);
+    if (!res.ok) {
+      setSaveError(`Save failed (${res.error || "unknown error"}). This change may not stick if you leave now - try again.`);
+      return false;
+    }
+    setSaveError(null);
+    return true;
+  }
+
+  const sortedDone = useMemo(() => {
+    return sessions
+      .filter((o) => o.status === "done")
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+        return (timeToMinutes(a.startTime) || 0) - (timeToMinutes(b.startTime) || 0);
+      });
+  }, [sessions]);
+
+  const doneOrders = useMemo(() => sortedDone.filter((s) => s.type === "order"), [sortedDone]);
+  const doneWaits = useMemo(() => sortedDone.filter((s) => s.type === "waiting"), [sortedDone]);
+
+  const activeSessions = useMemo(
+    () => [...sessions].filter((o) => o.status === "active").sort((a, b) => (timeToMinutes(b.startTime) || 0) - (timeToMinutes(a.startTime) || 0)),
+    [sessions]
+  );
+
+  function findPrevDone(dateStr, startTime) {
+    const sameDay = sortedDone.filter((o) => o.date === dateStr);
+    let prev = null;
+    for (const o of sameDay) {
+      if (timeToMinutes(o.startTime) < timeToMinutes(startTime)) prev = o;
+    }
+    return prev;
+  }
+
+  const effectiveStore =
+    startForm.platform === "DoorDash" || startForm.platform === "Grubhub" ? startForm.storeCustom : startForm.store;
+
+  const canStart =
+    startForm.type === "order"
+      ? startForm.platform && effectiveStore && startForm.car && startForm.startTime && startForm.startMiles !== ""
+      : startForm.car && startForm.startTime && startForm.startMiles !== "";
+
+  async function handleStart() {
+    if (!canStart) return;
+    const entry = {
+      id: uid(),
+      status: "active",
+      type: startForm.type,
+      date: startForm.date,
+      platform: startForm.type === "order" ? startForm.platform : startForm.platform || null,
+      store: startForm.type === "order" ? effectiveStore : null,
+      car: startForm.car,
+      startTime: startForm.startTime,
+      startMiles: Number(startForm.startMiles),
+      endTime: null,
+      endMiles: null,
+      pay: null,
+      deadMiles: null,
+    };
+    const next = [...sessions, entry];
+    setSessions(next);
+    await persist(KEY_SESSIONS, next);
+    setStartForm({
+      ...emptyStartForm(),
+      type: startForm.type,
+      date: startForm.date,
+      platform: startForm.platform,
+      car: startForm.car,
+    });
+  }
+
+  async function handleComplete(id, finish) {
+    const session = sessions.find((o) => o.id === id);
+    if (!session) return;
+    const prev = findPrevDone(session.date, session.startTime);
+    const deadMiles = prev ? session.startMiles - prev.endMiles : null;
+    const updated = {
+      ...session,
+      status: "done",
+      endTime: finish.endTime,
+      endMiles: Number(finish.endMiles),
+      pay: session.type === "order" ? Number(finish.pay) : null,
+      deadMiles,
+    };
+    const next = sessions.map((o) => (o.id === id ? updated : o));
+    setSessions(next);
+    const ok = await persist(KEY_SESSIONS, next);
+    if (ok) {
+      if (session.type === "order") {
+        setSavedFlash({
+          kind: "order",
+          perHour: updated.pay / durationHrs(updated.startTime, updated.endTime),
+          perMile: updated.pay / (updated.endMiles - updated.startMiles),
+        });
+      } else {
+        setSavedFlash({ kind: "waiting", hrs: durationHrs(updated.startTime, updated.endTime) });
+      }
+      setTimeout(() => setSavedFlash(null), 2600);
+    }
+    setStartForm((f) => ({ ...f, startTime: updated.endTime, startMiles: String(updated.endMiles) }));
+  }
+
+  async function handleDeleteSession(id) {
+    const next = sessions.filter((o) => o.id !== id);
+    setSessions(next);
+    await persist(KEY_SESSIONS, next);
+  }
+
+  const canSaveGas = gasForm.car && gasForm.station && gasForm.amount !== "" && gasForm.odometer !== "";
+
+  async function handleSaveGas() {
+    if (!canSaveGas) return;
+    const sameCar = gasEntries.filter((g) => g.car === gasForm.car).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const lastForCar = sameCar.length ? sameCar[sameCar.length - 1] : null;
+    const milesSince = lastForCar ? Number(gasForm.odometer) - Number(lastForCar.odometer) : null;
+    const entry = {
+      id: uid(),
+      date: gasForm.date,
+      car: gasForm.car,
+      station: gasForm.station,
+      amount: Number(gasForm.amount),
+      odometer: Number(gasForm.odometer),
+      milesSince,
+    };
+    const next = [...gasEntries, entry];
+    setGasEntries(next);
+    const ok = await persist(KEY_GAS, next);
+    if (ok) setGasForm(emptyGasForm());
+  }
+
+  async function handleDeleteGas(id) {
+    const next = gasEntries.filter((g) => g.id !== id);
+    setGasEntries(next);
+    await persist(KEY_GAS, next);
+  }
+
+  const platformSummary = useMemo(() => {
+    return PLATFORMS.map((p) => {
+      const list = doneOrders.filter((o) => o.platform === p);
+      const waitList = doneWaits.filter((w) => w.platform === p);
+      const pay = list.reduce((s, o) => s + o.pay, 0);
+      const orderHrs = list.reduce((s, o) => s + (durationHrs(o.startTime, o.endTime) || 0), 0);
+      const waitHrs = waitList.reduce((s, w) => s + (durationHrs(w.startTime, w.endTime) || 0), 0);
+      const miles = list.reduce((s, o) => s + (o.endMiles - o.startMiles), 0);
+      return {
+        platform: p,
+        orders: list.length,
+        pay,
+        orderHrs,
+        waitHrs,
+        miles,
+        perHourActive: orderHrs > 0 ? pay / orderHrs : null,
+        perHourReal: orderHrs + waitHrs > 0 ? pay / (orderHrs + waitHrs) : null,
+        perMile: miles > 0 ? pay / miles : null,
+      };
+    });
+  }, [doneOrders, doneWaits]);
+
+  const totals = useMemo(() => {
+    const pay = doneOrders.reduce((s, o) => s + o.pay, 0);
+    const orderHrs = doneOrders.reduce((s, o) => s + (durationHrs(o.startTime, o.endTime) || 0), 0);
+    const waitHrs = doneWaits.reduce((s, w) => s + (durationHrs(w.startTime, w.endTime) || 0), 0);
+    const orderMiles = doneOrders.reduce((s, o) => s + (o.endMiles - o.startMiles), 0);
+    const waitMiles = doneWaits.reduce((s, w) => s + (w.endMiles - w.startMiles), 0);
+    const deadMiles = sortedDone.reduce((s, o) => s + (o.deadMiles && o.deadMiles > 0 ? o.deadMiles : 0), 0);
+    const totalHrs = orderHrs + waitHrs;
+    return {
+      pay,
+      orderHrs,
+      waitHrs,
+      totalHrs,
+      orderMiles,
+      waitMiles,
+      deadMiles,
+      perHourActive: orderHrs > 0 ? pay / orderHrs : null,
+      perHourReal: totalHrs > 0 ? pay / totalHrs : null,
+      perMile: orderMiles > 0 ? pay / orderMiles : null,
+      pctWaiting: totalHrs > 0 ? (waitHrs / totalHrs) * 100 : null,
+    };
+  }, [doneOrders, doneWaits, sortedDone]);
+
+  const carCostPerMile = useMemo(() => {
+    const out = {};
+    CARS.forEach((car) => {
+      const list = gasEntries.filter((g) => g.car === car && g.milesSince);
+      if (!list.length) { out[car] = null; return; }
+      const totalCost = list.reduce((s, g) => s + g.amount, 0);
+      const totalMiles = list.reduce((s, g) => s + g.milesSince, 0);
+      out[car] = totalMiles > 0 ? totalCost / totalMiles : null;
+    });
+    return out;
+  }, [gasEntries]);
+
+  const recentDone = [...sortedDone].reverse().slice(0, 40);
+  const recentGas = [...gasEntries].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 20);
+
+  return (
+    <div style={{ background: "#14161A", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }} className="text-gray-100 pb-24">
+      <style>{`
+        .display-font { font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0.03em; font-stretch: condensed; }
+        .mono-font { font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace; font-variant-numeric: tabular-nums; }
+        input[type="date"]::-webkit-calendar-picker-indicator,
+        input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+        ::-webkit-scrollbar { display: none; }
+      `}</style>
+
+      <div className="px-5 pt-6 pb-4 border-b border-gray-800 sticky top-0 z-20" style={{ background: "#14161Aee", backdropFilter: "blur(6px)" }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-widest text-gray-500 mb-1">Gig Tracker</div>
+            <h1 className="display-font text-2xl font-semibold text-white">On The Clock</h1>
+          </div>
+          <div className="w-11 h-11 rounded-full flex items-center justify-center" style={{ background: "#F5A62322", border: "1px solid #F5A62355" }}>
+            <Gauge size={20} color="#F5A623" />
+          </div>
+        </div>
+      </div>
+
+      {saveError && (
+        <div className="px-4 pt-3 max-w-lg mx-auto">
+          <div className="rounded-xl px-4 py-3 flex items-start gap-2" style={{ background: "#FF5A5F22", border: "1px solid #FF5A5F66" }}>
+            <span className="text-sm mt-0.5" style={{ color: "#FF5A5F" }}>&#9888;</span>
+            <div className="flex-1">
+              <div className="text-sm font-medium" style={{ color: "#FF8A8E" }}>{saveError}</div>
+            </div>
+            <button onClick={() => setSaveError(null)} className="text-xs text-gray-500 mt-0.5">dismiss</button>
+          </div>
+        </div>
+      )}
+
+      <div className="px-4 pt-5 max-w-lg mx-auto">
+        {tab === "log" && (
+          <LogTab
+            activeSessions={activeSessions}
+            startForm={startForm}
+            setStartForm={setStartForm}
+            canStart={canStart}
+            onStart={handleStart}
+            onComplete={handleComplete}
+            onDelete={handleDeleteSession}
+            savedFlash={savedFlash}
+          />
+        )}
+        {tab === "history" && <HistoryTab sessions={recentDone} onDelete={handleDeleteSession} totals={totals} />}
+        {tab === "gas" && (
+          <GasTab
+            form={gasForm}
+            setForm={setGasForm}
+            canSave={canSaveGas}
+            onSave={handleSaveGas}
+            recentGas={recentGas}
+            onDelete={handleDeleteGas}
+            carCostPerMile={carCostPerMile}
+          />
+        )}
+        {tab === "summary" && <SummaryTab rows={platformSummary} totals={totals} />}
+        {tab === "backup" && (
+          <BackupTab
+            sessions={sessions}
+            gasEntries={gasEntries}
+            onRestore={async (data) => {
+              setSessions(data.sessions || []);
+              setGasEntries(data.gasEntries || []);
+              await persist(KEY_SESSIONS, data.sessions || []);
+              await persist(KEY_GAS, data.gasEntries || []);
+            }}
+          />
+        )}
+      </div>
+
+      <div className="fixed bottom-0 left-0 right-0 border-t border-gray-800 z-30" style={{ background: "#1A1C20" }}>
+        <div className="max-w-lg mx-auto grid grid-cols-5">
+          <NavBtn icon={<Clock size={18} />} label="Log" active={tab === "log"} onClick={() => setTab("log")} badge={activeSessions.length || null} />
+          <NavBtn icon={<ListChecks size={18} />} label="History" active={tab === "history"} onClick={() => setTab("history")} />
+          <NavBtn icon={<Fuel size={18} />} label="Gas" active={tab === "gas"} onClick={() => setTab("gas")} />
+          <NavBtn icon={<BarChart3 size={18} />} label="Summary" active={tab === "summary"} onClick={() => setTab("summary")} />
+          <NavBtn icon={<Save size={18} />} label="Backup" active={tab === "backup"} onClick={() => setTab("backup")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NavBtn({ icon, label, active, onClick, badge }) {
+  return (
+    <button onClick={onClick} className="relative flex flex-col items-center justify-center py-3 gap-1" style={{ color: active ? "#F5A623" : "#6B6E76" }}>
+      {icon}
+      {badge ? (
+        <span className="absolute top-1.5 right-[calc(50%-20px)] w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center" style={{ background: "#F5A623", color: "#14161A" }}>
+          {badge}
+        </span>
+      ) : null}
+      <span className="text-xs font-medium">{label}</span>
+    </button>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="mb-4">
+      <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+const inputClass =
+  "w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white text-base focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500";
+
+function PillGroup({ options, value, onChange, colorMap }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => {
+        const isActive = value === opt;
+        const color = colorMap ? colorMap[opt] : "#F5A623";
+        return (
+          <button
+            key={opt}
+            onClick={() => onChange(opt)}
+            className="px-4 py-2.5 rounded-xl text-sm font-medium border transition-colors"
+            style={isActive ? { background: color + "22", borderColor: color, color: color } : { background: "#1A1C20", borderColor: "#33363D", color: "#9A9CA3" }}
+          >
+            {opt}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Stat({ label, value, color }) {
+  return (
+    <div>
+      <div className="mono-font text-lg font-bold" style={{ color }}>{value}</div>
+      <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+function TypeToggle({ value, onChange }) {
+  return (
+    <div className="flex gap-2 mb-5 p-1 rounded-xl" style={{ background: "#0F1013" }}>
+      <button
+        onClick={() => onChange("order")}
+        className="flex-1 rounded-lg py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5"
+        style={value === "order" ? { background: "#F5A62322", color: "#F5A623" } : { color: "#6B6E76" }}
+      >
+        <Play size={14} /> Order
+      </button>
+      <button
+        onClick={() => onChange("waiting")}
+        className="flex-1 rounded-lg py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5"
+        style={value === "waiting" ? { background: WAIT_COLOR + "22", color: WAIT_COLOR } : { color: "#6B6E76" }}
+      >
+        <Hourglass size={14} /> Waiting
+      </button>
+    </div>
+  );
+}
+
+function LogTab({ activeSessions, startForm, setStartForm, canStart, onStart, onComplete, onDelete, savedFlash }) {
+  const storeOptions = STORES_BY_PLATFORM[startForm.platform] || [];
+  const needsCustomStore = startForm.platform === "DoorDash" || startForm.platform === "Grubhub";
+  const [showStartForm, setShowStartForm] = useState(activeSessions.length === 0);
+
+  return (
+    <div>
+      {savedFlash && (
+        <div className="mb-4 rounded-xl px-4 py-3 flex items-center justify-between" style={{ background: (savedFlash.kind === "order" ? "#34D399" : WAIT_COLOR) + "22", border: `1px solid ${(savedFlash.kind === "order" ? "#34D399" : WAIT_COLOR)}55` }}>
+          <span className="text-sm font-medium" style={{ color: savedFlash.kind === "order" ? "#34D399" : WAIT_COLOR }}>
+            {savedFlash.kind === "order" ? "Order completed" : "Waiting logged"}
+          </span>
+          <span className="mono-font text-sm" style={{ color: savedFlash.kind === "order" ? "#34D399" : WAIT_COLOR }}>
+            {savedFlash.kind === "order" ? `${fmtMoney(savedFlash.perHour)}/hr · ${fmtMoney(savedFlash.perMile)}/mi` : `${fmtNum(savedFlash.hrs, 2)} hrs`}
+          </span>
+        </div>
+      )}
+
+      {activeSessions.length > 0 && (
+        <div className="mb-5">
+          <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">
+            {activeSessions.length === 1 ? "1 In Progress" : `${activeSessions.length} In Progress`}
+          </div>
+          <div className="space-y-3">
+            {activeSessions.map((o) => (
+              <ActiveSessionCard key={o.id} session={o} onComplete={onComplete} onDelete={onDelete} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!showStartForm && (
+        <button
+          onClick={() => setShowStartForm(true)}
+          className="w-full rounded-xl py-3.5 font-semibold text-sm mb-2 flex items-center justify-center gap-2"
+          style={{ background: "#1A1C20", border: "1px dashed #3A3D44", color: "#9A9CA3" }}
+        >
+          <Play size={15} /> Start Something Else
+        </button>
+      )}
+
+      {showStartForm && (
+        <div className={activeSessions.length > 0 ? "rounded-2xl p-4 mt-1" : ""} style={activeSessions.length > 0 ? { background: "#1A1C20", border: "1px solid #2A2D33" } : {}}>
+          {activeSessions.length > 0 && <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">Start New</div>}
+
+          <TypeToggle value={startForm.type} onChange={(v) => setStartForm({ ...startForm, type: v, store: "" })} />
+
+          <Field label="Date">
+            <input type="date" className={inputClass} value={startForm.date} onChange={(e) => setStartForm({ ...startForm, date: e.target.value })} />
+          </Field>
+
+          <Field label={startForm.type === "order" ? "Platform" : "Platform (optional)"}>
+            <PillGroup options={PLATFORMS} value={startForm.platform} colorMap={PLATFORM_COLORS} onChange={(v) => setStartForm({ ...startForm, platform: v === startForm.platform ? "" : v, store: "" })} />
+          </Field>
+
+          {startForm.type === "order" && startForm.platform && (
+            <Field label="Store">
+              {needsCustomStore ? (
+                <input className={inputClass} placeholder="Restaurant name" value={startForm.storeCustom} onChange={(e) => setStartForm({ ...startForm, storeCustom: e.target.value })} />
+              ) : (
+                <select className={inputClass} value={startForm.store} onChange={(e) => setStartForm({ ...startForm, store: e.target.value })}>
+                  <option value="">Select a store</option>
+                  {storeOptions.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          )}
+
+          <Field label="Car">
+            <PillGroup options={CARS} value={startForm.car} onChange={(v) => setStartForm({ ...startForm, car: v })} />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Start Time">
+              <input type="time" className={inputClass} value={startForm.startTime} onChange={(e) => setStartForm({ ...startForm, startTime: e.target.value })} />
+            </Field>
+            <Field label="Start Mileage">
+              <input className={inputClass} type="number" inputMode="numeric" value={startForm.startMiles} onChange={(e) => setStartForm({ ...startForm, startMiles: e.target.value })} />
+            </Field>
+          </div>
+
+          <button
+            onClick={() => { onStart(); setShowStartForm(false); }}
+            disabled={!canStart}
+            className="w-full rounded-xl py-4 font-semibold text-base mt-2 flex items-center justify-center gap-2"
+            style={{
+              background: !canStart ? "#3A3D44" : startForm.type === "order" ? "#F5A623" : WAIT_COLOR,
+              color: !canStart ? "#6B6E76" : "#14161A",
+            }}
+          >
+            {startForm.type === "order" ? <Play size={17} /> : <Hourglass size={17} />}
+            {startForm.type === "order" ? "Start Order" : "Start Waiting"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActiveSessionCard({ session, onComplete, onDelete }) {
+  const [expanded, setExpanded] = useState(false);
+  const [endTime, setEndTime] = useState(nowTimeStr());
+  const [endMiles, setEndMiles] = useState("");
+  const [pay, setPay] = useState("");
+  const isOrder = session.type === "order";
+  const accentColor = isOrder ? PLATFORM_COLORS[session.platform] : WAIT_COLOR;
+
+  const liveDuration = durationHrs(session.startTime, endTime);
+  const liveMiles = endMiles !== "" ? Number(endMiles) - session.startMiles : null;
+  const livePay = pay !== "" ? Number(pay) : null;
+  const livePerHour = isOrder && livePay !== null && liveDuration ? livePay / liveDuration : null;
+  const livePerMile = isOrder && livePay !== null && liveMiles ? livePay / liveMiles : null;
+  const canComplete = isOrder
+    ? endTime && endMiles !== "" && pay !== "" && Number(endMiles) >= session.startMiles
+    : endTime && endMiles !== "" && Number(endMiles) >= session.startMiles;
+
+  return (
+    <div className="rounded-2xl p-4" style={{ background: "#1A1C20", border: `1px solid ${accentColor}44` }}>
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1" style={{ color: accentColor, background: accentColor + "22" }}>
+              {isOrder ? session.platform : <><Hourglass size={10} /> Waiting</>}
+              {isOrder && session.platform === null ? "" : ""}
+            </span>
+            <span className="text-xs" style={{ color: accentColor }}>&#9679; in progress</span>
+          </div>
+          <div className="text-sm text-gray-300 flex items-center gap-1">
+            {isOrder ? (
+              <><MapPin size={12} className="text-gray-500" /> {session.store} &middot; {session.car}</>
+            ) : (
+              <>{session.platform ? `${session.platform} · ` : ""}{session.car}</>
+            )}
+          </div>
+          <div className="mono-font text-xs text-gray-500 mt-1">
+            started {session.startTime} &middot; {session.startMiles} mi
+          </div>
+        </div>
+        <button onClick={() => onDelete(session.id)} className="text-gray-600 hover:text-red-400">
+          <Trash2 size={14} />
+        </button>
+      </div>
+
+      {!expanded ? (
+        <button onClick={() => setExpanded(true)} className="w-full rounded-lg py-2.5 font-medium text-sm mt-3 flex items-center justify-center gap-2" style={{ background: accentColor + "22", color: accentColor }}>
+          <CheckCircle2 size={15} /> {isOrder ? "Finish This Order" : "Done Waiting"}
+        </button>
+      ) : (
+        <div className="mt-3 pt-3 border-t border-gray-800">
+          {isOrder && (livePerHour !== null || livePerMile !== null) && (
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <div className="mono-font text-xl font-bold" style={{ color: "#F5A623" }}>{livePerHour !== null ? fmtMoney(livePerHour) : "--.--"}</div>
+                <div className="text-xs text-gray-500">per hour</div>
+              </div>
+              <div>
+                <div className="mono-font text-xl font-bold" style={{ color: "#4FD1C5" }}>{livePerMile !== null ? fmtMoney(livePerMile) : "--.--"}</div>
+                <div className="text-xs text-gray-500">per mile</div>
+              </div>
+            </div>
+          )}
+          {!isOrder && liveDuration !== null && (
+            <div className="mb-3">
+              <div className="mono-font text-xl font-bold" style={{ color: WAIT_COLOR }}>{fmtNum(liveDuration, 2)} hrs</div>
+              <div className="text-xs text-gray-500">waited so far</div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="End Time">
+              <input type="time" className={inputClass} value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+            </Field>
+            <Field label="End Mileage">
+              <input className={inputClass} type="number" inputMode="numeric" value={endMiles} onChange={(e) => setEndMiles(e.target.value)} />
+            </Field>
+          </div>
+          {isOrder && (
+            <Field label="Order Pay">
+              <input className={inputClass} type="number" inputMode="decimal" placeholder="0.00" value={pay} onChange={(e) => setPay(e.target.value)} />
+            </Field>
+          )}
+          <button
+            onClick={() => onComplete(session.id, { endTime, endMiles, pay })}
+            disabled={!canComplete}
+            className="w-full rounded-xl py-3.5 font-semibold text-sm"
+            style={{ background: canComplete ? "#34D399" : "#3A3D44", color: canComplete ? "#0B2118" : "#6B6E76" }}
+          >
+            {isOrder ? "Complete Order" : "Done Waiting"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoryTab({ sessions, onDelete, totals }) {
+  return (
+    <div>
+      <div className="rounded-2xl p-5 mb-5" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+        <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">All-Time</div>
+        <div className="grid grid-cols-3 gap-3">
+          <Stat label="Total Pay" value={fmtMoney(totals.pay)} color="#F5A623" />
+          <Stat label="Real $/Hour" value={totals.perHourReal !== null ? fmtMoney(totals.perHourReal) : "--"} color="#4FD1C5" />
+          <Stat label="$/Mile" value={totals.perMile !== null ? fmtMoney(totals.perMile) : "--"} color="#8CD867" />
+        </div>
+      </div>
+
+      {sessions.length === 0 && <div className="text-center text-gray-500 py-12 text-sm">Nothing completed yet.</div>}
+
+      <div className="space-y-2">
+        {sessions.map((o) => {
+          const isOrder = o.type === "order";
+          const dur = durationHrs(o.startTime, o.endTime);
+          const miles = o.endMiles - o.startMiles;
+          const accentColor = isOrder ? PLATFORM_COLORS[o.platform] : WAIT_COLOR;
+          return (
+            <div key={o.id} className="rounded-xl p-4 flex items-center justify-between" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1" style={{ color: accentColor, background: accentColor + "22" }}>
+                    {isOrder ? o.platform : <><Hourglass size={10} /> Waiting</>}
+                  </span>
+                  <span className="text-xs text-gray-500">{o.date}</span>
+                </div>
+                <div className="text-sm text-gray-300 flex items-center gap-1">
+                  {isOrder ? (<><MapPin size={12} className="text-gray-500" /> {o.store}<span className="text-gray-600 mx-1">&middot;</span>{o.car}</>) : (o.platform ? `${o.platform} · ${o.car}` : o.car)}
+                </div>
+                <div className="mono-font text-xs text-gray-500 mt-1">
+                  {fmtNum(dur, 2)}hrs &middot; {fmtNum(miles, 0)}mi{o.deadMiles ? ` · +${fmtNum(o.deadMiles, 0)} dead mi` : ""}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="mono-font font-bold text-white">{isOrder ? fmtMoney(o.pay) : "—"}</div>
+                <button onClick={() => onDelete(o.id)} className="mt-1 text-gray-600 hover:text-red-400"><Trash2 size={14} /></button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function GasTab({ form, setForm, canSave, onSave, recentGas, onDelete, carCostPerMile }) {
+  return (
+    <div>
+      <div className="rounded-2xl p-5 mb-5" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+        <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">Cost Per Mile</div>
+        <div className="grid grid-cols-2 gap-4">
+          {CARS.map((car) => (
+            <div key={car}>
+              <div className="mono-font text-2xl font-bold" style={{ color: "#F5A623" }}>{carCostPerMile[car] !== null && carCostPerMile[car] !== undefined ? fmtMoney(carCostPerMile[car]) : "--.--"}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{car}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Field label="Date"><input type="date" className={inputClass} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></Field>
+      <Field label="Car"><PillGroup options={CARS} value={form.car} onChange={(v) => setForm({ ...form, car: v })} /></Field>
+      <Field label="Station"><input className={inputClass} placeholder="e.g. Speedway" value={form.station} onChange={(e) => setForm({ ...form, station: e.target.value })} /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Amount"><input className={inputClass} type="number" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></Field>
+        <Field label="Odometer"><input className={inputClass} type="number" inputMode="numeric" value={form.odometer} onChange={(e) => setForm({ ...form, odometer: e.target.value })} /></Field>
+      </div>
+
+      <button onClick={onSave} disabled={!canSave} className="w-full rounded-xl py-4 font-semibold text-base mt-2 mb-6" style={{ background: canSave ? "#F5A623" : "#3A3D44", color: canSave ? "#14161A" : "#6B6E76" }}>
+        Save Fill-Up
+      </button>
+
+      <div className="space-y-2">
+        {recentGas.map((g) => (
+          <div key={g.id} className="rounded-xl p-4 flex items-center justify-between" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+            <div>
+              <div className="text-sm text-gray-300">{g.car} &middot; {g.station}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{g.date}{g.milesSince ? ` · ${fmtNum(g.milesSince, 0)} mi since last` : ""}</div>
+            </div>
+            <div className="text-right">
+              <div className="mono-font font-bold text-white">{fmtMoney(g.amount)}</div>
+              <button onClick={() => onDelete(g.id)} className="mt-1 text-gray-600 hover:text-red-400"><Trash2 size={14} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SummaryTab({ rows, totals }) {
+  const maxPerHour = Math.max(...rows.map((r) => r.perHourReal || 0), 0.01);
+  return (
+    <div>
+      <div className="rounded-2xl p-5 mb-5" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+        <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">Overall</div>
+        <div className="grid grid-cols-2 gap-4">
+          <Stat label="Real $/Hour (incl. waiting)" value={totals.perHourReal !== null ? fmtMoney(totals.perHourReal) : "--"} color="#4FD1C5" />
+          <Stat label="$/Hour (active only)" value={totals.perHourActive !== null ? fmtMoney(totals.perHourActive) : "--"} color="#F5A623" />
+        </div>
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <Stat label="$/Mile" value={totals.perMile !== null ? fmtMoney(totals.perMile) : "--"} color="#8CD867" />
+          <Stat label="% Time Waiting" value={totals.pctWaiting !== null ? fmtNum(totals.pctWaiting, 0) + "%" : "--"} color={WAIT_COLOR} />
+        </div>
+        <div className="flex gap-4 mt-4 pt-4 border-t border-gray-800 text-sm text-gray-400 flex-wrap">
+          <div><span className="mono-font text-gray-200">{fmtNum(totals.orderHrs, 1)}</span> order hrs</div>
+          <div><span className="mono-font text-gray-200">{fmtNum(totals.waitHrs, 1)}</span> wait hrs</div>
+          <div><span className="mono-font text-gray-200">{fmtNum(totals.orderMiles, 0)}</span> order mi</div>
+          <div><span className="mono-font text-gray-200">{fmtNum(totals.deadMiles, 0)}</span> dead mi</div>
+        </div>
+      </div>
+
+      <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">By Platform</div>
+      <div className="space-y-3">
+        {rows.map((r) => (
+          <div key={r.platform} className="rounded-xl p-4" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold" style={{ color: PLATFORM_COLORS[r.platform] }}>{r.platform}</span>
+              <span className="text-xs text-gray-500">{r.orders} orders &middot; {fmtNum(r.waitHrs, 1)}h wait</span>
+            </div>
+            <div className="w-full h-2 rounded-full mb-3" style={{ background: "#2A2D33" }}>
+              <div className="h-2 rounded-full" style={{ width: `${((r.perHourReal || 0) / maxPerHour) * 100}%`, background: PLATFORM_COLORS[r.platform] }} />
+            </div>
+            <div className="flex justify-between mono-font text-sm">
+              <span className="text-gray-300">{r.perHourReal !== null ? fmtMoney(r.perHourReal) + "/hr real" : "--"}</span>
+              <span className="text-gray-300">{r.perMile !== null ? fmtMoney(r.perMile) + "/mi" : "--"}</span>
+              <span className="text-gray-500">{fmtMoney(r.pay)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BackupTab({ sessions, gasEntries, onRestore }) {
+  const [copyStatus, setCopyStatus] = useState(null);
+  const [importText, setImportText] = useState("");
+  const [importStatus, setImportStatus] = useState(null);
+
+  const exportData = { sessions, gasEntries, exportedAt: new Date().toISOString() };
+  const exportText = JSON.stringify(exportData);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(exportText);
+      setCopyStatus("copied");
+    } catch (e) {
+      setCopyStatus("manual");
+    }
+    setTimeout(() => setCopyStatus(null), 3000);
+  }
+
+  function handleRestore() {
+    try {
+      const parsed = JSON.parse(importText.trim());
+      if (!parsed.sessions && !parsed.gasEntries) {
+        setImportStatus({ ok: false, msg: "That doesn't look like a backup - couldn't find your data in it." });
+        return;
+      }
+      onRestore(parsed);
+      setImportStatus({ ok: true, msg: `Restored ${parsed.sessions?.length || 0} sessions and ${parsed.gasEntries?.length || 0} gas entries.` });
+      setImportText("");
+    } catch (e) {
+      setImportStatus({ ok: false, msg: "Couldn't read that - make sure you pasted the whole backup text." });
+    }
+  }
+
+  return (
+    <div>
+      <div className="rounded-2xl p-5 mb-5" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+        <div className="text-xs uppercase tracking-widest text-gray-500 mb-2">Why this exists</div>
+        <div className="text-sm text-gray-400 leading-relaxed">
+          Automatic saving can be unreliable. Copy your data here and paste it somewhere safe (Notes app, an email to yourself) every so often - that way you always have a backup that doesn't depend on this app's storage working.
+        </div>
+      </div>
+
+      <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">Export</div>
+      <div className="rounded-2xl p-4 mb-5" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+        <div className="text-sm text-gray-400 mb-3">
+          {sessions.length} session{sessions.length === 1 ? "" : "s"} &middot; {gasEntries.length} gas entr{gasEntries.length === 1 ? "y" : "ies"}
+        </div>
+        <button
+          onClick={handleCopy}
+          className="w-full rounded-xl py-3.5 font-semibold text-sm flex items-center justify-center gap-2 mb-3"
+          style={{ background: "#F5A62322", color: "#F5A623" }}
+        >
+          <Copy size={16} /> Copy My Data
+        </button>
+        {copyStatus === "copied" && <div className="text-sm text-center" style={{ color: "#34D399" }}>Copied! Paste it into Notes or an email to save it.</div>}
+        {copyStatus === "manual" && (
+          <div>
+            <div className="text-xs text-gray-500 mb-2">Couldn't auto-copy - tap into the box below, select all, and copy manually:</div>
+            <textarea readOnly className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs" rows={4} value={exportText} onClick={(e) => e.target.select()} />
+          </div>
+        )}
+      </div>
+
+      <div className="text-xs uppercase tracking-widest text-gray-500 mb-3">Restore</div>
+      <div className="rounded-2xl p-4" style={{ background: "#1A1C20", border: "1px solid #2A2D33" }}>
+        <div className="text-sm text-gray-400 mb-3">Paste a backup you copied earlier to bring your data back.</div>
+        <textarea
+          className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs mb-3"
+          rows={4}
+          placeholder="Paste your backup text here..."
+          value={importText}
+          onChange={(e) => setImportText(e.target.value)}
+        />
+        <button
+          onClick={handleRestore}
+          disabled={!importText.trim()}
+          className="w-full rounded-xl py-3.5 font-semibold text-sm flex items-center justify-center gap-2"
+          style={{ background: importText.trim() ? "#4FD1C5" : "#3A3D44", color: importText.trim() ? "#0B2118" : "#6B6E76" }}
+        >
+          <ClipboardPaste size={16} /> Restore This Backup
+        </button>
+        {importStatus && (
+          <div className="text-sm text-center mt-3" style={{ color: importStatus.ok ? "#34D399" : "#FF8A8E" }}>
+            {importStatus.msg}
+          </div>
+        )}
+        <div className="text-xs text-gray-600 mt-3">Note: this replaces everything currently in the app with what you paste - only use this to restore, not to add on top of existing data.</div>
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(GigLogger));
+</script>
+</body>
+</html>
